@@ -14,6 +14,8 @@ import Newsletter from "../components/Newsletter";
 import Footer from "../components/Footer";
 import CartDrawer from "../components/CartDrawer";
 
+const API_URL = import.meta.env.VITE_API_URL;
+
 function Home() {
   // Application states
   const [pizzas, setPizzas] = useState([]);
@@ -27,9 +29,7 @@ function Home() {
   useEffect(() => {
     const fetchPizzas = async () => {
       try {
-        const response = await fetch(
-          "http://localhost:5000/api/pizzas"
-        );
+        const response = await fetch(`${API_URL}/pizzas`);
 
         if (!response.ok) {
           throw new Error("Failed to fetch pizzas");
@@ -128,7 +128,6 @@ function Home() {
 
   return (
     <>
-      {/* NAVBAR */}
       <Navbar
         search={search}
         setSearch={setSearch}
@@ -137,13 +136,9 @@ function Home() {
       />
 
       <main>
-        {/* HERO SECTION */}
         <Hero />
-
-        {/* WHY CHOOSE US */}
         <WhyChooseUs />
 
-        {/* FOOD COLLECTION */}
         <PizzaCollection
           pizzas={pizzas}
           onAddToCart={addToCart}
@@ -152,23 +147,14 @@ function Home() {
           loading={loading}
         />
 
-        {/* PROMOTIONAL BANNER */}
         <PromoBanner />
-
-        {/* ABOUT SECTION */}
         <About />
-
-        {/* CUSTOMER TESTIMONIALS */}
         <Testimonials />
-
-        {/* NEWSLETTER */}
         <Newsletter />
       </main>
 
-      {/* FOOTER */}
       <Footer />
 
-      {/* CART DRAWER */}
       <CartDrawer
         isOpen={cartOpen}
         onClose={() => setCartOpen(false)}

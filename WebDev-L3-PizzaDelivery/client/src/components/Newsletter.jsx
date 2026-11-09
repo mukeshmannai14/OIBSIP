@@ -4,6 +4,8 @@ import { motion } from "motion/react";
 import { ArrowRight, Mail, CheckCircle2 } from "lucide-react";
 import toast from "react-hot-toast";
 
+const API_URL = import.meta.env.VITE_API_URL;
+
 function Newsletter() {
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
@@ -23,7 +25,7 @@ function Newsletter() {
       setLoading(true);
 
       const response = await fetch(
-        "http://localhost:5000/api/newsletter/subscribe",
+        `${API_URL}/newsletter/subscribe`,
         {
           method: "POST",
           headers: {
@@ -58,7 +60,6 @@ function Newsletter() {
         transition={{ duration: 0.6 }}
         className="relative mx-auto max-w-7xl overflow-hidden rounded-[2rem] bg-[#e85d2a] px-6 py-14 text-center text-white md:px-16 md:py-20"
       >
-        {/* Decorative circles */}
         <div className="absolute -right-20 -top-20 h-64 w-64 rounded-full border-[35px] border-white/10" />
         <div className="absolute -bottom-28 -left-16 h-64 w-64 rounded-full border-[35px] border-white/10" />
 
@@ -93,10 +94,7 @@ function Newsletter() {
               className="mx-auto mt-9 flex max-w-xl flex-col gap-3 rounded-2xl bg-white p-2 sm:flex-row sm:rounded-full"
             >
               <div className="flex flex-1 items-center gap-3 px-4">
-                <Mail
-                  size={19}
-                  className="shrink-0 text-gray-400"
-                />
+                <Mail size={19} className="shrink-0 text-gray-400" />
 
                 <input
                   type="email"

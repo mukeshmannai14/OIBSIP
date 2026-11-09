@@ -1,4 +1,3 @@
-
 import axios from "axios";
 import { auth } from "../firebase/firebaseConfig";
 
@@ -11,7 +10,6 @@ api.interceptors.request.use(async (config) => {
 
   if (currentUser) {
     const idToken = await currentUser.getIdToken();
-
     config.headers.Authorization = `Bearer ${idToken}`;
   }
 
