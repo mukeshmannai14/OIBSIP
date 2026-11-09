@@ -1,0 +1,11 @@
+﻿node_modules/
+.env
+.env.*
+**/.env
+**/.env.*
+firebase-credentials/
+**/firebase-credentials/
+serviceAccountKey.json
+dist/
+build/
+.git-backup/
