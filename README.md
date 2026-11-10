@@ -1,4 +1,4 @@
-::: {align="center"}
+{align="center"}
 # 🍕 PizzaHut
 
 ### MERN Stack Pizza Ordering Application
