@@ -15,6 +15,14 @@ const inventorySchema = new mongoose.Schema(
       default: "Ingredients",
     },
 
+    // Connects inventory items with pizza recipes
+    ingredientKey: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      default: "",
+    },
+
     quantity: {
       type: Number,
       required: true,
@@ -29,6 +37,13 @@ const inventorySchema = new mongoose.Schema(
       enum: ["kg", "g", "litres", "ml", "pieces", "packets", "boxes"],
     },
 
+    // Ingredient quantity consumed for one pizza
+    usagePerPizza: {
+      type: Number,
+      min: 0,
+      default: 0,
+    },
+
     minStock: {
       type: Number,
       required: true,
@@ -41,11 +56,37 @@ const inventorySchema = new mongoose.Schema(
       trim: true,
       default: "",
     },
+
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
+
+    // Low-stock email notification tracking
+    lowStockAlertSent: {
+      type: Boolean,
+      default: false,
+    },
+
+    lowStockAlertSentAt: {
+      type: Date,
+      default: null,
+    },
   },
   {
     timestamps: true,
   }
 );
+
+// Only ingredients can be configured for automatic deduction
+inventorySchema.pre("validate", function (next) {
+  if (this.category !== "Ingredients") {
+    this.ingredientKey = "";
+    this.usagePerPizza = 0;
+  }
+
+  next();
+});
 
 module.exports =
   mongoose.models.Inventory ||

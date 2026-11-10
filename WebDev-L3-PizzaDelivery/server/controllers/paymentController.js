@@ -1,9 +1,11 @@
 
 const crypto = require("crypto");
+const mongoose = require("mongoose");
 
 const razorpay = require("../config/razorpay");
 const Order = require("../models/Order");
 const Pizza = require("../models/Pizza");
+const Inventory = require("../models/Inventory");
 const Settings = require("../models/Settings");
 
 // Custom pizza pricing rules
@@ -85,13 +87,242 @@ const calculateCustomPizzaPrice = (item) => {
   );
 };
 
+// Build ingredient requirements for an order
+const buildIngredientRequirements = async (order) => {
+  const requirements = new Map();
+
+  const addRequirement = (key, quantity, unit) => {
+    if (!key || !Number.isFinite(quantity) || quantity <= 0 || !unit) {
+      throw new Error(`Invalid ingredient recipe: ${key || "Unknown"}`);
+    }
+
+    const normalizedKey = key.trim().toLowerCase();
+
+    const existing = requirements.get(normalizedKey);
+
+    if (existing && existing.unit !== unit) {
+      throw new Error(`Unit mismatch for ingredient: ${normalizedKey}`);
+    }
+
+    requirements.set(normalizedKey, {
+      ingredientKey: normalizedKey,
+      quantity:
+        (existing?.quantity || 0) + quantity,
+      unit,
+    });
+  };
+
+  for (const item of order.items) {
+    if (!item.isCustom) {
+      if (!item.pizza) {
+        throw new Error(`Pizza reference missing for ${item.name}`);
+      }
+
+      const pizza = await Pizza.findById(item.pizza).lean();
+
+      if (!pizza || !pizza.ingredients?.length) {
+        throw new Error(
+          `Ingredient recipe is not configured for ${item.name}`
+        );
+      }
+
+      for (const ingredient of pizza.ingredients) {
+        addRequirement(
+          ingredient.ingredientKey,
+          ingredient.quantity * item.quantity,
+          ingredient.unit
+        );
+      }
+
+      continue;
+    }
+
+    // Custom pizza inventory key convention:
+    // pizza_base
+    // crust_classic
+    // cheese_mozzarella
+    // topping_onion
+    //
+    // Each corresponding Inventory item must have
+    // its usagePerPizza configured by the admin.
+
+    const customKeys = [
+      "pizza_base",
+      `crust_${item.crust}`,
+      `cheese_${item.cheese}`,
+      ...item.toppings.map((topping) => `topping_${topping}`),
+    ].map((key) => key.toLowerCase().replace(/\s+/g, "_"));
+
+    const uniqueKeys = [...new Set(customKeys)];
+
+    const customIngredients = await Inventory.find({
+      category: "Ingredients",
+      ingredientKey: { $in: uniqueKeys },
+      isActive: true,
+    }).lean();
+
+    const ingredientMap = new Map(
+      customIngredients.map((ingredient) => [
+        ingredient.ingredientKey,
+        ingredient,
+      ])
+    );
+
+    for (const key of uniqueKeys) {
+      const ingredient = ingredientMap.get(key);
+
+      if (!ingredient) {
+        throw new Error(
+          `Custom pizza ingredient mapping missing: ${key}`
+        );
+      }
+
+      if (
+        !Number.isFinite(ingredient.usagePerPizza) ||
+        ingredient.usagePerPizza <= 0
+      ) {
+        throw new Error(
+          `Usage per pizza is not configured for ${ingredient.name}`
+        );
+      }
+
+      addRequirement(
+        key,
+        ingredient.usagePerPizza * item.quantity,
+        ingredient.unit
+      );
+    }
+  }
+
+  if (requirements.size === 0) {
+    throw new Error("No ingredient requirements found");
+  }
+
+  return [...requirements.values()];
+};
+
+// Deduct ingredients and mark payment in one transaction
+const deductIngredientsAndConfirmOrder = async (
+  orderId,
+  paymentId
+) => {
+  const requirementsOrder = await Order.findById(orderId);
+
+  if (!requirementsOrder) {
+    throw new Error("Order not found");
+  }
+
+  const requirements = await buildIngredientRequirements(
+    requirementsOrder
+  );
+
+  const session = await mongoose.startSession();
+
+  try {
+    let updatedOrder;
+
+    await session.withTransaction(async () => {
+      const order = await Order.findById(orderId).session(session);
+
+      if (!order) {
+        throw new Error("Order not found");
+      }
+
+      // Idempotency protection
+      if (order.paymentStatus === "Paid") {
+        if (order.razorpayPaymentId === paymentId) {
+          updatedOrder = order;
+          return;
+        }
+
+        throw new Error("Order has already been paid");
+      }
+
+      if (order.paymentStatus !== "Pending") {
+        throw new Error("Order is not awaiting payment");
+      }
+
+      for (const requirement of requirements) {
+        // Only Ingredients are eligible for deduction.
+        // Packaging, Beverages and Other are never deducted.
+        const result = await Inventory.updateOne(
+          {
+            ingredientKey: requirement.ingredientKey,
+            category: "Ingredients",
+            isActive: true,
+            unit: requirement.unit,
+            quantity: { $gte: requirement.quantity },
+          },
+          {
+            $inc: {
+              quantity: -requirement.quantity,
+            },
+          },
+          { session }
+        );
+
+        if (result.modifiedCount !== 1) {
+          throw new Error(
+            `Insufficient stock or inventory mismatch: ${requirement.ingredientKey}`
+          );
+        }
+      }
+
+      order.paymentStatus = "Paid";
+      order.razorpayPaymentId = paymentId;
+      order.orderStatus = "Confirmed";
+
+      order.inventoryDeduction = {
+        status: "Completed",
+        deductedAt: new Date(),
+        error: "",
+      };
+
+      await order.save({ session });
+
+      updatedOrder = order;
+    });
+
+    return updatedOrder;
+  } finally {
+    await session.endSession();
+  }
+};
+
+// Record captured payment even if inventory deduction fails.
+// This prevents a successfully captured payment being treated as unpaid.
+const recordPaidOrderWithInventoryFailure = async (
+  orderId,
+  paymentId,
+  error
+) => {
+  return Order.findOneAndUpdate(
+    {
+      _id: orderId,
+      paymentStatus: "Pending",
+    },
+    {
+      $set: {
+        paymentStatus: "Paid",
+        razorpayPaymentId: paymentId,
+        orderStatus: "Confirmed",
+        inventoryDeduction: {
+          status: "Failed",
+          deductedAt: null,
+          error: String(error.message || error).slice(0, 500),
+        },
+      },
+    },
+    { new: true }
+  );
+};
+
 // Create Razorpay order
 const createPaymentOrder = async (req, res) => {
   let savedOrder;
 
   try {
     const { items, address } = req.body;
-
     const firebaseUser = req.firebaseUser;
 
     if (!firebaseUser?.uid || !firebaseUser?.email) {
@@ -156,7 +387,6 @@ const createPaymentOrder = async (req, res) => {
       });
     }
 
-    // Read restaurant settings
     let settings = await Settings.findOne();
 
     if (!settings) {
@@ -170,7 +400,6 @@ const createPaymentOrder = async (req, res) => {
       });
     }
 
-    // Calculate and validate cart items
     let subtotal = 0;
     const verifiedItems = [];
 
@@ -278,7 +507,6 @@ const createPaymentOrder = async (req, res) => {
       });
     }
 
-    // Save pending order in MongoDB
     savedOrder = await Order.create({
       firebaseUid: firebaseUser.uid,
       customerName: fullName.trim(),
@@ -293,13 +521,14 @@ const createPaymentOrder = async (req, res) => {
       },
       subtotal,
       deliveryFee,
+      taxAmount,
+      taxPercentage: Number(settings.taxPercentage || 0),
       totalAmount,
       paymentMethod: "Razorpay",
       paymentStatus: "Pending",
       orderStatus: "Pending",
     });
 
-    // Create Razorpay order
     const razorpayOrder = await razorpay.orders.create({
       amount: amountInPaise,
       currency: "INR",
@@ -337,7 +566,7 @@ const createPaymentOrder = async (req, res) => {
   }
 };
 
-// Verify Razorpay payment
+// Verify Razorpay payment and deduct ingredients
 const verifyPayment = async (req, res) => {
   try {
     const {
@@ -371,15 +600,19 @@ const verifyPayment = async (req, res) => {
       });
     }
 
-    if (order.paymentStatus === "Paid") {
-      if (order.razorpayPaymentId === razorpay_payment_id) {
-        return res.status(200).json({
-          success: true,
-          message: "Payment already verified",
-          order,
-        });
-      }
+    if (
+      order.paymentStatus === "Paid" &&
+      order.razorpayPaymentId === razorpay_payment_id
+    ) {
+      return res.status(200).json({
+        success: true,
+        message: "Payment already verified",
+        inventoryDeduction: order.inventoryDeduction,
+        order,
+      });
+    }
 
+    if (order.paymentStatus === "Paid") {
       return res.status(409).json({
         success: false,
         message: "This order has already been paid",
@@ -418,7 +651,7 @@ const verifyPayment = async (req, res) => {
       });
     }
 
-    // Confirm payment details directly with Razorpay
+    // Verify captured payment directly with Razorpay
     const payment = await razorpay.payments.fetch(razorpay_payment_id);
 
     if (
@@ -433,16 +666,55 @@ const verifyPayment = async (req, res) => {
       });
     }
 
-    order.paymentStatus = "Paid";
-    order.razorpayPaymentId = razorpay_payment_id;
-    order.orderStatus = "Confirmed";
+    let updatedOrder;
 
-    await order.save();
+    try {
+      updatedOrder = await deductIngredientsAndConfirmOrder(
+        order._id,
+        razorpay_payment_id
+      );
+    } catch (inventoryError) {
+      console.error("Inventory deduction failed:", inventoryError);
+
+      updatedOrder = await recordPaidOrderWithInventoryFailure(
+        order._id,
+        razorpay_payment_id,
+        inventoryError
+      );
+
+      if (!updatedOrder) {
+        const latestOrder = await Order.findById(order._id);
+
+        if (
+          latestOrder?.paymentStatus === "Paid" &&
+          latestOrder.razorpayPaymentId === razorpay_payment_id
+        ) {
+          return res.status(200).json({
+            success: true,
+            message: "Payment already verified",
+            inventoryDeduction: latestOrder.inventoryDeduction,
+            order: latestOrder,
+          });
+        }
+
+        throw inventoryError;
+      }
+
+      return res.status(200).json({
+        success: true,
+        paymentStatus: "Paid",
+        inventoryDeduction: "Failed",
+        message:
+          "Payment captured successfully, but inventory deduction needs admin attention.",
+        order: updatedOrder,
+      });
+    }
 
     return res.status(200).json({
       success: true,
-      message: "Payment verified successfully",
-      order,
+      message: "Payment verified and ingredient stock deducted successfully",
+      inventoryDeduction: "Completed",
+      order: updatedOrder,
     });
   } catch (error) {
     console.error("Payment verification error:", error);

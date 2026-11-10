@@ -2,6 +2,24 @@
 const mongoose = require("mongoose");
 const Order = require("../models/Order");
 
+const ALLOWED_STATUSES = [
+  "Pending",
+  "Confirmed",
+  "Preparing",
+  "Out for Delivery",
+  "Delivered",
+  "Cancelled",
+];
+
+const STATUS_FLOW = {
+  Pending: ["Confirmed", "Cancelled"],
+  Confirmed: ["Preparing", "Cancelled"],
+  Preparing: ["Out for Delivery", "Cancelled"],
+  "Out for Delivery": ["Delivered"],
+  Delivered: [],
+  Cancelled: [],
+};
+
 // GET all orders (Admin only)
 const getAllOrders = async (req, res) => {
   try {
@@ -9,7 +27,7 @@ const getAllOrders = async (req, res) => {
       .sort({ createdAt: -1 })
       .lean();
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       count: orders.length,
       orders,
@@ -17,7 +35,7 @@ const getAllOrders = async (req, res) => {
   } catch (error) {
     console.error("Get orders error:", error);
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Failed to fetch orders",
     });
@@ -27,7 +45,16 @@ const getAllOrders = async (req, res) => {
 // GET single order by ID (Admin only)
 const getOrderById = async (req, res) => {
   try {
-    const order = await Order.findById(req.params.id).lean();
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid order ID",
+      });
+    }
+
+    const order = await Order.findById(id).lean();
 
     if (!order) {
       return res.status(404).json({
@@ -36,14 +63,14 @@ const getOrderById = async (req, res) => {
       });
     }
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       order,
     });
   } catch (error) {
     console.error("Get order details error:", error);
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Failed to fetch order details",
     });
@@ -59,7 +86,7 @@ const getMyOrders = async (req, res) => {
       .sort({ createdAt: -1 })
       .lean();
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       count: orders.length,
       orders,
@@ -67,7 +94,7 @@ const getMyOrders = async (req, res) => {
   } catch (error) {
     console.error("Get my orders error:", error);
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Failed to fetch your orders",
     });
@@ -98,14 +125,14 @@ const getMyOrderById = async (req, res) => {
       });
     }
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       order,
     });
   } catch (error) {
     console.error("Get my order details error:", error);
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Failed to fetch order details",
     });
@@ -115,29 +142,24 @@ const getMyOrderById = async (req, res) => {
 // UPDATE order status (Admin only)
 const updateOrderStatus = async (req, res) => {
   try {
-    const allowedStatuses = [
-      "Pending",
-      "Confirmed",
-      "Preparing",
-      "Out for Delivery",
-      "Delivered",
-      "Cancelled",
-    ];
-
+    const { id } = req.params;
     const { orderStatus } = req.body;
 
-    if (!allowedStatuses.includes(orderStatus)) {
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid order ID",
+      });
+    }
+
+    if (!ALLOWED_STATUSES.includes(orderStatus)) {
       return res.status(400).json({
         success: false,
         message: "Invalid order status",
       });
     }
 
-    const order = await Order.findByIdAndUpdate(
-      req.params.id,
-      { $set: { orderStatus } },
-      { returnDocument: "after", runValidators: true }
-    );
+    const order = await Order.findById(id);
 
     if (!order) {
       return res.status(404).json({
@@ -146,7 +168,53 @@ const updateOrderStatus = async (req, res) => {
       });
     }
 
-    res.status(200).json({
+    // Only paid orders can be processed.
+    if (orderStatus !== "Cancelled" && order.paymentStatus !== "Paid") {
+      return res.status(400).json({
+        success: false,
+        message: "Only paid orders can be processed",
+      });
+    }
+
+    if (order.orderStatus === orderStatus) {
+      return res.status(200).json({
+        success: true,
+        message: "Order already has this status",
+        order,
+      });
+    }
+
+    const allowedNextStatuses = STATUS_FLOW[order.orderStatus] || [];
+
+    if (!allowedNextStatuses.includes(orderStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot change order status from ${order.orderStatus} to ${orderStatus}`,
+      });
+    }
+
+    // Only allow cancellation before preparation starts.
+    if (
+      orderStatus === "Cancelled" &&
+      order.orderStatus !== "Pending" &&
+      order.orderStatus !== "Confirmed"
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "This order can no longer be cancelled",
+      });
+    }
+
+    order.orderStatus = orderStatus;
+
+    order.statusHistory.push({
+      status: orderStatus,
+      updatedAt: new Date(),
+    });
+
+    await order.save();
+
+    return res.status(200).json({
       success: true,
       message: "Order status updated successfully",
       order,
@@ -154,7 +222,7 @@ const updateOrderStatus = async (req, res) => {
   } catch (error) {
     console.error("Update order status error:", error);
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Failed to update order status",
     });

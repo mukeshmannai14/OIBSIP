@@ -13,11 +13,11 @@ const {
 const { protect } = require("../middleware/authMiddleware");
 const { adminOnly } = require("../middleware/adminMiddleware");
 
-// IMPORTANT: Customer routes must come first
+// Customer routes
 router.get("/my-orders", protect, getMyOrders);
 router.get("/my-orders/:id", protect, getMyOrderById);
 
-// Admin-only middleware
+// All routes below require admin authentication
 router.use(protect, adminOnly);
 
 // Admin routes

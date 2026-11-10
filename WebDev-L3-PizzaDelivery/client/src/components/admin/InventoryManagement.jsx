@@ -5,25 +5,39 @@ import api from "../../services/api";
 const initialForm = {
   name: "",
   category: "Ingredients",
+  ingredientKey: "",
   quantity: "",
   unit: "kg",
-  minStock: "",
+  usagePerPizza: "0",
+  minStock: "5",
   supplier: "",
+  isActive: true,
 };
+
+const units = [
+  "kg",
+  "g",
+  "litres",
+  "ml",
+  "pieces",
+  "packets",
+  "boxes",
+];
 
 export default function InventoryManagement() {
   const [items, setItems] = useState([]);
-  const [form, setForm] = useState(initialForm);
+  const [form, setForm] = useState({ ...initialForm });
   const [editingId, setEditingId] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("All");
+  const [categoryFilter, setCategoryFilter] = useState("All");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
-  // Fetch inventory from MongoDB
+  // Fetch inventory
   const fetchInventory = async () => {
     try {
       setLoading(true);
@@ -33,8 +47,7 @@ export default function InventoryManagement() {
       setItems(response.data.items || []);
     } catch (err) {
       setError(
-        err.response?.data?.message ||
-        "Unable to load inventory."
+        err.response?.data?.message || "Unable to load inventory."
       );
     } finally {
       setLoading(false);
@@ -45,32 +58,44 @@ export default function InventoryManagement() {
     fetchInventory();
   }, []);
 
-  // Calculate inventory statistics
+  // Statistics
   const lowStockItems = items.filter(
-    (item) => item.quantity <= item.minStock
+    (item) => item.isActive !== false && item.quantity <= item.minStock
   );
 
   const totalItems = items.length;
 
+  const activeItems = items.filter(
+    (item) => item.isActive !== false
+  );
+
   // Search and filter
   const filteredItems = useMemo(() => {
     return items.filter((item) => {
+      const searchText = search.toLowerCase();
+
       const matchesSearch =
-        item.name.toLowerCase().includes(search.toLowerCase()) ||
-        item.supplier?.toLowerCase().includes(search.toLowerCase());
+        item.name?.toLowerCase().includes(searchText) ||
+        item.supplier?.toLowerCase().includes(searchText) ||
+        item.ingredientKey?.toLowerCase().includes(searchText);
 
       const isLowStock = item.quantity <= item.minStock;
 
-      const matchesFilter =
+      const matchesStock =
         filter === "All" ||
         (filter === "Low Stock" && isLowStock) ||
-        (filter === "In Stock" && !isLowStock);
+        (filter === "In Stock" && !isLowStock) ||
+        (filter === "Inactive" && item.isActive === false);
 
-      return matchesSearch && matchesFilter;
+      const matchesCategory =
+        categoryFilter === "All" ||
+        item.category === categoryFilter;
+
+      return matchesSearch && matchesStock && matchesCategory;
     });
-  }, [items, search, filter]);
+  }, [items, search, filter, categoryFilter]);
 
-  // Open add form
+  // Add inventory
   const handleAdd = () => {
     setForm({ ...initialForm });
     setEditingId(null);
@@ -78,15 +103,18 @@ export default function InventoryManagement() {
     setShowForm(true);
   };
 
-  // Open edit form
+  // Edit inventory
   const handleEdit = (item) => {
     setForm({
-      name: item.name,
-      category: item.category,
-      quantity: item.quantity,
-      unit: item.unit,
-      minStock: item.minStock,
+      name: item.name || "",
+      category: item.category || "Ingredients",
+      ingredientKey: item.ingredientKey || "",
+      quantity: String(item.quantity ?? ""),
+      unit: item.unit || "kg",
+      usagePerPizza: String(item.usagePerPizza ?? 0),
+      minStock: String(item.minStock ?? 5),
       supplier: item.supplier || "",
+      isActive: item.isActive !== false,
     });
 
     setEditingId(item._id);
@@ -94,17 +122,17 @@ export default function InventoryManagement() {
     setShowForm(true);
   };
 
-  // Input changes
+  // Form input changes
   const handleChange = (event) => {
-    const { name, value } = event.target;
+    const { name, value, type, checked } = event.target;
 
     setForm((previous) => ({
       ...previous,
-      [name]: value,
+      [name]: type === "checkbox" ? checked : value,
     }));
   };
 
-  // Add or update inventory
+  // Save inventory
   const handleSubmit = async (event) => {
     event.preventDefault();
 
@@ -113,16 +141,26 @@ export default function InventoryManagement() {
       setError("");
       setSuccess("");
 
+      const isIngredient = form.category === "Ingredients";
+
       const payload = {
-        ...form,
         name: form.name.trim(),
+        category: form.category,
+        ingredientKey: isIngredient
+          ? form.ingredientKey.trim().toLowerCase().replace(/\s+/g, "_")
+          : "",
         quantity: Number(form.quantity),
+        unit: form.unit,
+        usagePerPizza: isIngredient
+          ? Number(form.usagePerPizza)
+          : 0,
         minStock: Number(form.minStock),
         supplier: form.supplier.trim(),
+        isActive: form.isActive,
       };
 
       if (!payload.name) {
-        throw new Error("Ingredient name is required.");
+        throw new Error("Inventory name is required.");
       }
 
       if (
@@ -132,6 +170,18 @@ export default function InventoryManagement() {
         payload.minStock < 0
       ) {
         throw new Error("Enter valid stock quantities.");
+      }
+
+      if (isIngredient && !payload.ingredientKey) {
+        throw new Error("Ingredient key is required.");
+      }
+
+      if (
+        isIngredient &&
+        (!Number.isFinite(payload.usagePerPizza) ||
+          payload.usagePerPizza < 0)
+      ) {
+        throw new Error("Enter a valid usage per pizza.");
       }
 
       if (editingId) {
@@ -150,8 +200,8 @@ export default function InventoryManagement() {
     } catch (err) {
       setError(
         err.response?.data?.message ||
-        err.message ||
-        "Unable to save inventory."
+          err.message ||
+          "Unable to save inventory."
       );
     } finally {
       setSaving(false);
@@ -180,12 +230,12 @@ export default function InventoryManagement() {
     } catch (err) {
       setError(
         err.response?.data?.message ||
-        "Unable to delete inventory item."
+          "Unable to delete inventory item."
       );
     }
   };
 
-  // Quick stock adjustment
+  // Stock adjustment
   const adjustStock = async (item, amount) => {
     const newQuantity = Math.max(0, item.quantity + amount);
 
@@ -199,17 +249,43 @@ export default function InventoryManagement() {
 
       setItems((previous) =>
         previous.map((current) =>
-          current._id === item._id
-            ? response.data.item
-            : current
+          current._id === item._id ? response.data.item : current
         )
       );
 
       setSuccess(`${item.name} stock updated.`);
     } catch (err) {
       setError(
+        err.response?.data?.message || "Unable to update stock."
+      );
+    }
+  };
+
+  // Activate / deactivate inventory
+  const toggleActive = async (item) => {
+    try {
+      setError("");
+      setSuccess("");
+
+      const response = await api.put(`/inventory/${item._id}`, {
+        isActive: item.isActive === false,
+      });
+
+      setItems((previous) =>
+        previous.map((current) =>
+          current._id === item._id ? response.data.item : current
+        )
+      );
+
+      setSuccess(
+        `${item.name} ${
+          response.data.item.isActive ? "activated" : "deactivated"
+        } successfully.`
+      );
+    } catch (err) {
+      setError(
         err.response?.data?.message ||
-        "Unable to update stock."
+          "Unable to update ingredient status."
       );
     }
   };
@@ -218,11 +294,11 @@ export default function InventoryManagement() {
     setShowForm(false);
     setEditingId(null);
     setForm({ ...initialForm });
+    setError("");
   };
 
   return (
     <div className="space-y-6">
-
       {/* Header */}
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
         <div>
@@ -230,7 +306,7 @@ export default function InventoryManagement() {
             Inventory Management
           </h1>
           <p className="mt-1 text-sm text-gray-500">
-            Track ingredients, stock levels and suppliers.
+            Manage ingredients, recipes, stock levels and suppliers.
           </p>
         </div>
 
@@ -238,7 +314,7 @@ export default function InventoryManagement() {
           onClick={handleAdd}
           className="rounded-xl bg-orange-500 px-5 py-3 font-semibold text-white hover:bg-orange-600"
         >
-          + Add Ingredient
+          + Add Inventory
         </button>
       </div>
 
@@ -271,8 +347,8 @@ export default function InventoryManagement() {
         />
 
         <StatCard
-          title="Healthy Stock Items"
-          value={totalItems - lowStockItems.length}
+          title="Active Inventory Items"
+          value={activeItems.length}
           icon="✅"
         />
       </div>
@@ -280,12 +356,9 @@ export default function InventoryManagement() {
       {/* Low stock alerts */}
       {lowStockItems.length > 0 && (
         <div className="rounded-2xl border border-red-200 bg-red-50 p-5">
-          <div className="mb-3 flex items-center gap-2">
-            <span className="text-xl">⚠️</span>
-            <h3 className="font-bold text-red-700">
-              Low Stock Alerts ({lowStockItems.length})
-            </h3>
-          </div>
+          <h3 className="mb-3 font-bold text-red-700">
+            ⚠️ Low Stock Alerts ({lowStockItems.length})
+          </h3>
 
           <div className="flex flex-wrap gap-2">
             {lowStockItems.map((item) => (
@@ -304,20 +377,33 @@ export default function InventoryManagement() {
       <div className="flex flex-col gap-3 rounded-2xl border border-gray-100 bg-white p-4 shadow-sm md:flex-row">
         <input
           type="text"
-          placeholder="Search ingredients or suppliers..."
+          placeholder="Search ingredients, keys or suppliers..."
           value={search}
           onChange={(event) => setSearch(event.target.value)}
           className="flex-1 rounded-xl border border-gray-200 px-4 py-3 outline-none focus:border-orange-500"
         />
 
         <select
+          value={categoryFilter}
+          onChange={(event) => setCategoryFilter(event.target.value)}
+          className="rounded-xl border border-gray-200 px-4 py-3"
+        >
+          <option value="All">All Categories</option>
+          <option value="Ingredients">Ingredients</option>
+          <option value="Packaging">Packaging</option>
+          <option value="Beverages">Beverages</option>
+          <option value="Other">Other</option>
+        </select>
+
+        <select
           value={filter}
           onChange={(event) => setFilter(event.target.value)}
-          className="rounded-xl border border-gray-200 px-4 py-3 outline-none focus:border-orange-500"
+          className="rounded-xl border border-gray-200 px-4 py-3"
         >
           <option value="All">All Stock</option>
           <option value="In Stock">Healthy Stock</option>
           <option value="Low Stock">Low Stock</option>
+          <option value="Inactive">Inactive</option>
         </select>
 
         <button
@@ -347,20 +433,21 @@ export default function InventoryManagement() {
               No inventory items found
             </h3>
             <p className="mt-2 text-sm text-gray-500">
-              Add your first ingredient to get started.
+              Add your first inventory item to get started.
             </p>
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[900px] text-left">
+            <table className="w-full min-w-[1100px] text-left">
               <thead className="bg-gray-50 text-xs uppercase text-gray-400">
                 <tr>
-                  <th className="px-5 py-4">Ingredient</th>
+                  <th className="px-5 py-4">Inventory</th>
                   <th className="px-5 py-4">Category</th>
-                  <th className="px-5 py-4">Quantity</th>
-                  <th className="px-5 py-4">Minimum Stock</th>
+                  <th className="px-5 py-4">Stock</th>
+                  <th className="px-5 py-4">Recipe Key</th>
+                  <th className="px-5 py-4">Usage / Pizza</th>
                   <th className="px-5 py-4">Status</th>
-                  <th className="px-5 py-4">Stock Update</th>
+                  <th className="px-5 py-4">Adjust</th>
                   <th className="px-5 py-4">Actions</th>
                 </tr>
               </thead>
@@ -369,6 +456,8 @@ export default function InventoryManagement() {
                 {filteredItems.map((item) => {
                   const isLowStock =
                     item.quantity <= item.minStock;
+
+                  const isActive = item.isActive !== false;
 
                   return (
                     <tr
@@ -382,30 +471,49 @@ export default function InventoryManagement() {
                         <p className="mt-1 text-xs text-gray-400">
                           {item.supplier || "No supplier"}
                         </p>
+                        <p className="mt-1 text-xs text-gray-400">
+                          Minimum: {item.minStock} {item.unit}
+                        </p>
                       </td>
 
                       <td className="px-5 py-4 text-sm text-gray-600">
                         {item.category}
                       </td>
 
-                      <td className="px-5 py-4 font-semibold">
+                      <td className="px-5 py-4 font-semibold text-gray-800">
                         {item.quantity} {item.unit}
                       </td>
 
                       <td className="px-5 py-4 text-sm text-gray-600">
-                        {item.minStock} {item.unit}
+                        {item.category === "Ingredients"
+                          ? item.ingredientKey || "Not configured"
+                          : "—"}
+                      </td>
+
+                      <td className="px-5 py-4 text-sm text-gray-600">
+                        {item.category === "Ingredients"
+                          ? `${item.usagePerPizza || 0} ${item.unit}`
+                          : "—"}
                       </td>
 
                       <td className="px-5 py-4">
-                        <span
-                          className={`rounded-full px-3 py-2 text-xs font-semibold ${
-                            isLowStock
-                              ? "bg-red-50 text-red-600"
-                              : "bg-green-50 text-green-600"
-                          }`}
-                        >
-                          {isLowStock ? "Low Stock" : "In Stock"}
-                        </span>
+                        <div className="flex flex-col gap-1">
+                          <span
+                            className={`w-fit rounded-full px-3 py-2 text-xs font-semibold ${
+                              !isActive
+                                ? "bg-gray-100 text-gray-600"
+                                : isLowStock
+                                ? "bg-red-50 text-red-600"
+                                : "bg-green-50 text-green-600"
+                            }`}
+                          >
+                            {!isActive
+                              ? "Inactive"
+                              : isLowStock
+                              ? "Low Stock"
+                              : "In Stock"}
+                          </span>
+                        </div>
                       </td>
 
                       <td className="px-5 py-4">
@@ -428,12 +536,19 @@ export default function InventoryManagement() {
                       </td>
 
                       <td className="px-5 py-4">
-                        <div className="flex gap-2">
+                        <div className="flex flex-wrap gap-2">
                           <button
                             onClick={() => handleEdit(item)}
                             className="rounded-lg bg-blue-50 px-3 py-2 text-sm font-medium text-blue-600 hover:bg-blue-100"
                           >
                             Edit
+                          </button>
+
+                          <button
+                            onClick={() => toggleActive(item)}
+                            className="rounded-lg bg-gray-100 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-200"
+                          >
+                            {isActive ? "Disable" : "Enable"}
                           </button>
 
                           <button
@@ -456,11 +571,16 @@ export default function InventoryManagement() {
       {/* Add / Edit modal */}
       {showForm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/50 p-4">
-          <div className="my-6 w-full max-w-xl rounded-2xl bg-white p-6 shadow-2xl">
+          <div className="my-6 max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
             <div className="mb-6 flex items-center justify-between">
-              <h2 className="text-xl font-bold text-gray-900">
-                {editingId ? "Edit Inventory" : "Add Ingredient"}
-              </h2>
+              <div>
+                <h2 className="text-xl font-bold text-gray-900">
+                  {editingId ? "Edit Inventory" : "Add Inventory"}
+                </h2>
+                <p className="mt-1 text-xs text-gray-500">
+                  Configure stock and ingredient consumption.
+                </p>
+              </div>
 
               <button
                 onClick={closeForm}
@@ -471,7 +591,7 @@ export default function InventoryManagement() {
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-4">
-              <FormField label="Ingredient Name">
+              <FormField label="Inventory Name">
                 <input
                   name="name"
                   value={form.name}
@@ -497,23 +617,60 @@ export default function InventoryManagement() {
                   </select>
                 </FormField>
 
-                <FormField label="Unit">
+                <FormField label="Stock Unit">
                   <select
                     name="unit"
                     value={form.unit}
                     onChange={handleChange}
                     className="form-input"
                   >
-                    <option value="kg">kg</option>
-                    <option value="g">g</option>
-                    <option value="litres">litres</option>
-                    <option value="ml">ml</option>
-                    <option value="pieces">pieces</option>
-                    <option value="packets">packets</option>
-                    <option value="boxes">boxes</option>
+                    {units.map((unit) => (
+                      <option key={unit} value={unit}>
+                        {unit}
+                      </option>
+                    ))}
                   </select>
                 </FormField>
               </div>
+
+              {/* Ingredient recipe configuration */}
+              {form.category === "Ingredients" && (
+                <div className="space-y-4 rounded-xl border border-orange-200 bg-orange-50 p-4">
+                  <h3 className="font-bold text-orange-800">
+                    Ingredient Recipe Configuration
+                  </h3>
+
+                  <FormField label="Ingredient Key">
+                    <input
+                      name="ingredientKey"
+                      value={form.ingredientKey}
+                      onChange={handleChange}
+                      required
+                      placeholder="mozzarella"
+                      className="form-input"
+                    />
+                    <p className="mt-1 text-xs text-gray-500">
+                      Use a unique key without spaces. Example: mozzarella.
+                    </p>
+                  </FormField>
+
+                  <FormField label="Usage Per Pizza">
+                    <input
+                      name="usagePerPizza"
+                      type="number"
+                      min="0"
+                      step="any"
+                      value={form.usagePerPizza}
+                      onChange={handleChange}
+                      required
+                      className="form-input"
+                    />
+                    <p className="mt-1 text-xs text-gray-500">
+                      The amount consumed for one pizza, in the selected stock unit.
+                    </p>
+                  </FormField>
+                </div>
+              )}
 
               <div className="grid gap-4 sm:grid-cols-2">
                 <FormField label="Current Quantity">
@@ -553,6 +710,24 @@ export default function InventoryManagement() {
                 />
               </FormField>
 
+              <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-gray-200 p-3">
+                <input
+                  type="checkbox"
+                  name="isActive"
+                  checked={form.isActive}
+                  onChange={handleChange}
+                  className="h-4 w-4 accent-orange-500"
+                />
+                <span>
+                  <span className="block text-sm font-semibold text-gray-800">
+                    Active inventory item
+                  </span>
+                  <span className="text-xs text-gray-500">
+                    Inactive ingredients will not be used for automatic deduction.
+                  </span>
+                </span>
+              </label>
+
               <div className="flex flex-col-reverse gap-3 pt-4 sm:flex-row sm:justify-end">
                 <button
                   type="button"
@@ -571,7 +746,7 @@ export default function InventoryManagement() {
                     ? "Saving..."
                     : editingId
                     ? "Update Inventory"
-                    : "Add Ingredient"}
+                    : "Add Inventory"}
                 </button>
               </div>
             </form>
@@ -589,6 +764,7 @@ function StatCard({ title, value, icon, warning }) {
         <p className="text-sm text-gray-500">{title}</p>
         <span className="text-2xl">{icon}</span>
       </div>
+
       <h2
         className={`mt-3 text-3xl font-bold ${
           warning ? "text-red-600" : "text-gray-900"

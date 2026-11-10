@@ -158,6 +158,25 @@ const orderSchema = new mongoose.Schema(
       default: null,
     },
 
+    // Inventory deduction tracking
+    inventoryDeduction: {
+      status: {
+        type: String,
+        enum: ["Not Started", "Completed", "Failed", "Partial"],
+        default: "Not Started",
+      },
+
+      deductedAt: {
+        type: Date,
+        default: null,
+      },
+
+      error: {
+        type: String,
+        default: "",
+      },
+    },
+
     orderStatus: {
       type: String,
       enum: [
