@@ -1,10 +1,7 @@
-node_modules/
-.env
-.env.*
-**/.env
-**/.env.*
+studio-9864137595-1079e-3cb8eda87918.json
 firebase-credentials/
 serviceAccountKey.json
-dist/
-build/
-**/*firebase-adminsdk*.json
+*firebase-adminsdk*.json
+.env
+.env.*
+node_modules/

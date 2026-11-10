@@ -18,14 +18,22 @@ const paymentRoutes = require("./routes/paymentRoutes");
 
 const app = express();
 
+// CORS configuration
+const allowedOrigins = [
+  "http://localhost:5173",
+  process.env.CLIENT_URL,
+].filter(Boolean);
+
 app.use(
   cors({
-    origin: process.env.CLIENT_URL || "http://localhost:5173",
+    origin: allowedOrigins,
+    credentials: true,
   })
 );
 
 app.use(express.json());
 
+// Health check
 app.get("/", (req, res) => {
   res.send("PizzaHut API is running");
 });
@@ -36,7 +44,8 @@ app.get("/api/health", (req, res) => {
     message: "Server is healthy",
   });
 });
-app.use(express.json());
+
+// API routes
 app.use("/api/pizzas", pizzaRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/admin", adminRoutes);

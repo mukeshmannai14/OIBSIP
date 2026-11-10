@@ -1,11 +1,7 @@
-﻿node_modules/
+﻿# Firebase service account credentials
+studio-9864137595-1079e-3cb8eda87918.json
+**/*firebase-adminsdk*.json
+**/serviceAccountKey.json
+**/firebase-credentials/
 .env
 .env.*
-**/.env
-**/.env.*
-firebase-credentials/
-**/firebase-credentials/
-serviceAccountKey.json
-dist/
-build/
-.git-backup/
